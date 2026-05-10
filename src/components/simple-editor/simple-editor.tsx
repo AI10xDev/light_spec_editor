@@ -39,6 +39,7 @@ import {
   type AzureOpenAIConfig,
   type TestResult,
 } from "@/lib/azure-openai"
+import { htmlToMarkdown } from "@/lib/html-to-markdown"
 
 import "./simple-editor.css"
 
@@ -174,6 +175,7 @@ interface TabBarProps {
   onNew: () => void
   onOpen: () => void
   onSave: () => void
+  onSaveMarkdown: () => void
   onRename: (id: string, name: string) => void
   aiConfigured: boolean
   aiLoading: boolean
@@ -451,6 +453,7 @@ function TabBar({
   onNew,
   onOpen,
   onSave,
+  onSaveMarkdown,
   onRename,
   aiConfigured,
   aiLoading,
@@ -526,6 +529,16 @@ function TabBar({
           onClick={onSave}
         >
           💾
+        </button>
+        <button
+          type="button"
+          className="simple-editor__btn"
+          aria-label="Save current document as Markdown"
+          title="Save as Markdown"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onSaveMarkdown}
+        >
+          MD
         </button>
         <button
           type="button"
@@ -919,6 +932,16 @@ export function SimpleEditor({
     if (suggestedName !== doc.name) handleRename(doc.id, suggestedName)
   }, [editor, documents, activeId, handleRename])
 
+  const handleSaveMarkdown = useCallback(async () => {
+    if (!editor) return
+    const doc = documents.find((d) => d.id === activeId)
+    if (!doc) return
+    const md = htmlToMarkdown(editor.getHTML())
+    const stem = doc.name.replace(/\.[a-z0-9]+$/i, "")
+    const suggestedName = `${stem || "untitled"}.md`
+    await saveTextToFile(suggestedName, md)
+  }, [editor, documents, activeId])
+
   if (!editor) return null
 
   return (
@@ -931,6 +954,7 @@ export function SimpleEditor({
         onNew={handleNew}
         onOpen={handleOpenClick}
         onSave={handleSave}
+        onSaveMarkdown={handleSaveMarkdown}
         onRename={handleRename}
         aiConfigured={aiConfigured}
         aiLoading={aiStatus.loading}
