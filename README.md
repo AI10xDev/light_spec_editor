@@ -2,6 +2,8 @@
 
 A lightweight editor for spec driven development - has a chabot for templates.
 
+![Spec Ops Editor screenshot](docs/screenshot.png)
+
 Built on [Tiptap](https://tiptap.dev/) and React, designed for writing technical specifications, RFCs, and design documents with minimal friction.
 
 ## Features
