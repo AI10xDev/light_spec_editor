@@ -12,6 +12,44 @@
 .app__header h1 {
   font-size: 36px;
   margin: 0 0 8px;
+  display: inline-block;
+  position: relative;
+  padding: 8px 16px;
+  border-radius: 12px;
+  background: #fff;
+  isolation: isolate;
+}
+
+.app__header h1::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 16px;
+  background: linear-gradient(
+    90deg,
+    #ff0000,
+    #ff8000,
+    #ffff00,
+    #00ff00,
+    #00ffff,
+    #0000ff,
+    #8000ff,
+    #ff0080,
+    #ff0000
+  );
+  background-size: 200% 100%;
+  z-index: -1;
+  filter: blur(6px);
+  animation: rainbow-shift 4s linear infinite;
+}
+
+@keyframes rainbow-shift {
+  from {
+    background-position: 0% 50%;
+  }
+  to {
+    background-position: 200% 50%;
+  }
 }
 
 .app__header p {
