@@ -294,7 +294,7 @@ export async function testConnection(
         status: null,
         url,
         message:
-          "Network/CORS failure. The Azure resource probably isn't allowing requests from this origin — add it under Resource Management → Networking → CORS.",
+          "Network/CORS failure. For local browser testing, allow this origin in the Azure resource CORS settings. For production, proxy requests through a backend instead of exposing provider keys in the browser.",
       }
     }
     return { ok: false, status: null, url, message: msg }

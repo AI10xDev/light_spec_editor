@@ -302,8 +302,10 @@ function AiSettingsPanel({ onClose, onSaved }: AiSettingsPanelProps) {
         />
       </label>
       <p className="simple-editor__ai-hint">
-        Stored locally in this browser. The Azure resource must allow CORS from this origin.
-        Type, then pause — Tab to accept, Esc to dismiss.
+        Local prototype mode stores settings in this browser. Direct Azure calls
+        require CORS for local testing; public deployments should proxy AI
+        requests through a backend. Type, then pause — Tab to accept, Esc to
+        dismiss.
       </p>
       {testResult && (
         <div
