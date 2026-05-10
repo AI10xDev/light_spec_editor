@@ -1,73 +1,73 @@
-# React + TypeScript + Vite
+# Spec Ops Editor
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A lightweight editor for spec driven development - has a chabot for templates.
 
-Currently, two official plugins are available:
+Built on [Tiptap](https://tiptap.dev/) and React, designed for writing technical specifications, RFCs, and design documents with minimal friction.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Features
 
-## React Compiler
+### Rich-text editing
+- Headings, paragraphs, blockquotes, and horizontal rules
+- Bold, italic, underline, strikethrough, code, subscript, and superscript
+- Text color and highlight
+- Text alignment (left, center, right, justify)
+- Bullet, ordered, and task lists
+- Code blocks with syntax-aware formatting
+- Tables with row/column management
+- Images and emoji
+- Math expressions via Tiptap's mathematics extension
+- Link insertion and editing
+- Typography niceties (smart quotes, dashes, ellipses)
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Spec-driven workflow
+- **Spec template chatbot** — a built-in assistant for generating boilerplate spec sections (problem statement, goals, non-goals, design, alternatives, rollout) from a short prompt
+- Slash commands and mentions for quickly inserting templated blocks
+- Drag handles for reordering sections
+- Auto-generated table of contents
+- Unique IDs on headings for stable anchor links
 
-## Expanding the ESLint configuration
+### Collaboration & AI
+- Real-time collaboration powered by Yjs
+- Collaboration carets to show other users' cursors
+- Tiptap Pro AI extension for inline AI assistance
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### Developer experience
+- React 19 + TypeScript + Vite
+- SCSS modules for styling
+- ESLint configured for React and TypeScript
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Getting started
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+The dev server runs on Vite's default port (typically `http://localhost:5173`).
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Scripts
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+| Command | Description |
+| --- | --- |
+| `npm run dev` | Start the Vite dev server with HMR |
+| `npm run build` | Type-check and build for production |
+| `npm run preview` | Preview the production build locally |
+| `npm run lint` | Run ESLint over the project |
+
+## Project structure
+
+```
+src/
+  components/
+    simple-editor/        # Main editor shell
+    spec-template-chat/   # Template chatbot
+    tiptap-extension/     # Custom Tiptap extensions
+    tiptap-node/          # Custom node views
+    tiptap-templates/     # Pre-built spec templates
+    tiptap-ui/            # Editor UI controls
+    tiptap-ui-primitive/  # Low-level UI primitives
+  contexts/               # React contexts
+  hooks/                  # Shared hooks
+  lib/                    # Utilities
+  styles/                 # Global SCSS
 ```
