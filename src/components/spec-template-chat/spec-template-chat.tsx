@@ -41,7 +41,7 @@ export interface SpecTemplateChatProps {
   onConfigure: () => void
 }
 
-const FENCE_RE = /```(?:html|HTML)?\s*\n?([\s\S]*?)```/
+const FENCE_RE = /```[a-zA-Z0-9_-]*[ \t]*\r?\n?([\s\S]*?)```/
 
 function extractTemplate(text: string): string | null {
   const m = text.match(FENCE_RE)

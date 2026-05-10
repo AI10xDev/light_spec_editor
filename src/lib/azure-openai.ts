@@ -99,7 +99,8 @@ export function isConfigured(): boolean {
 }
 
 interface ChatChoice {
-  message?: { content?: string }
+  message?: { content?: string | null; refusal?: string | null }
+  finish_reason?: string
 }
 interface ChatResponse {
   choices?: ChatChoice[]
@@ -137,7 +138,10 @@ export async function chatCompletion(
     },
     body: JSON.stringify({
       messages,
-      max_completion_tokens: options.maxTokens ?? 2048,
+      // 4096 leaves headroom for reasoning models (gpt-5/o1/o3) which spend
+      // tokens on internal reasoning before any visible output. With 2048
+      // they routinely return empty content + finish_reason "length".
+      max_completion_tokens: options.maxTokens ?? 4096,
     }),
     signal: options.signal,
   })
@@ -148,7 +152,28 @@ export async function chatCompletion(
   }
 
   const data = (await res.json()) as ChatResponse
-  return data.choices?.[0]?.message?.content ?? ""
+  const choice = data.choices?.[0]
+  const content = choice?.message?.content ?? ""
+  if (content.trim()) return content
+
+  const refusal = choice?.message?.refusal
+  if (refusal) throw new Error(`Model refused the request: ${refusal}`)
+
+  const finish = choice?.finish_reason
+  if (finish === "length") {
+    throw new Error(
+      "Model exhausted its token budget before producing visible output. " +
+        "Reasoning models (gpt-5, o1, o3) spend tokens on internal reasoning — " +
+        "try a non-reasoning deployment or raise max_completion_tokens.",
+    )
+  }
+  if (finish === "content_filter") {
+    throw new Error("Response was blocked by Azure content filter.")
+  }
+
+  throw new Error(
+    `Empty response from Azure OpenAI${finish ? ` (finish_reason: ${finish})` : ""}.`,
+  )
 }
 
 export async function getCompletion(
