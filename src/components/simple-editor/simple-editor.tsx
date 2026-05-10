@@ -1,8 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { EditorContent, useEditor } from "@tiptap/react"
+import { EditorContent, EditorContext, useEditor } from "@tiptap/react"
 import type { Editor } from "@tiptap/react"
 import { StarterKit } from "@tiptap/starter-kit"
 import { Placeholder } from "@tiptap/extensions"
+import { Mention } from "@tiptap/extension-mention"
+import { TaskList, TaskItem } from "@tiptap/extension-list"
+import { Color, TextStyle } from "@tiptap/extension-text-style"
+import { Highlight } from "@tiptap/extension-highlight"
+import { Subscript } from "@tiptap/extension-subscript"
+import { Superscript } from "@tiptap/extension-superscript"
+import { TextAlign } from "@tiptap/extension-text-align"
+import { Mathematics } from "@tiptap/extension-mathematics"
+import { Typography } from "@tiptap/extension-typography"
+import { UniqueID } from "@tiptap/extension-unique-id"
+import { Emoji, gitHubEmojis } from "@tiptap/extension-emoji"
+import {
+  getHierarchicalIndexes,
+  TableOfContents,
+} from "@tiptap/extension-table-of-contents"
+import { Image } from "@tiptap/extension-image"
+import { TableKit } from "@/components/tiptap-node/table-node/extensions/table-node-extension"
+import { EmojiDropdownMenu } from "@/components/tiptap-ui/emoji-dropdown-menu"
+import { MentionDropdownMenu } from "@/components/tiptap-ui/mention-dropdown-menu"
+import { SlashDropdownMenu } from "@/components/tiptap-ui/slash-dropdown-menu"
 
 import {
   AiCompletion,
@@ -557,11 +577,39 @@ function Toolbar({ editor }: { editor: Editor }) {
         <s>S</s>
       </ToolbarButton>
       <ToolbarButton
+        label="Underline"
+        isActive={editor.isActive("underline")}
+        onClick={() => editor.chain().focus().toggleUnderline().run()}
+      >
+        <u>U</u>
+      </ToolbarButton>
+      <ToolbarButton
         label="Inline code"
         isActive={editor.isActive("code")}
         onClick={() => editor.chain().focus().toggleCode().run()}
       >
         {"</>"}
+      </ToolbarButton>
+      <ToolbarButton
+        label="Subscript"
+        isActive={editor.isActive("subscript")}
+        onClick={() => editor.chain().focus().toggleSubscript().run()}
+      >
+        X<sub>2</sub>
+      </ToolbarButton>
+      <ToolbarButton
+        label="Superscript"
+        isActive={editor.isActive("superscript")}
+        onClick={() => editor.chain().focus().toggleSuperscript().run()}
+      >
+        X<sup>2</sup>
+      </ToolbarButton>
+      <ToolbarButton
+        label="Highlight"
+        isActive={editor.isActive("highlight")}
+        onClick={() => editor.chain().focus().toggleHighlight().run()}
+      >
+        <mark>H</mark>
       </ToolbarButton>
 
       <span className="simple-editor__sep" aria-hidden />
@@ -612,11 +660,90 @@ function Toolbar({ editor }: { editor: Editor }) {
         ❝
       </ToolbarButton>
       <ToolbarButton
+        label="Task list"
+        isActive={editor.isActive("taskList")}
+        onClick={() => editor.chain().focus().toggleTaskList().run()}
+      >
+        ☑
+      </ToolbarButton>
+      <ToolbarButton
         label="Code block"
         isActive={editor.isActive("codeBlock")}
         onClick={() => editor.chain().focus().toggleCodeBlock().run()}
       >
         {"{}"}
+      </ToolbarButton>
+
+      <span className="simple-editor__sep" aria-hidden />
+
+      <ToolbarButton
+        label="Align left"
+        isActive={editor.isActive({ textAlign: "left" })}
+        onClick={() => editor.chain().focus().setTextAlign("left").run()}
+      >
+        ⯇
+      </ToolbarButton>
+      <ToolbarButton
+        label="Align center"
+        isActive={editor.isActive({ textAlign: "center" })}
+        onClick={() => editor.chain().focus().setTextAlign("center").run()}
+      >
+        ≡
+      </ToolbarButton>
+      <ToolbarButton
+        label="Align right"
+        isActive={editor.isActive({ textAlign: "right" })}
+        onClick={() => editor.chain().focus().setTextAlign("right").run()}
+      >
+        ⯈
+      </ToolbarButton>
+      <ToolbarButton
+        label="Justify"
+        isActive={editor.isActive({ textAlign: "justify" })}
+        onClick={() => editor.chain().focus().setTextAlign("justify").run()}
+      >
+        ☰
+      </ToolbarButton>
+
+      <span className="simple-editor__sep" aria-hidden />
+
+      <ToolbarButton
+        label="Insert / edit link"
+        isActive={editor.isActive("link")}
+        onClick={() => {
+          const previous = (editor.getAttributes("link").href as string | undefined) ?? ""
+          const url = window.prompt("URL (leave empty to remove)", previous)
+          if (url === null) return
+          if (url === "") {
+            editor.chain().focus().extendMarkRange("link").unsetLink().run()
+            return
+          }
+          editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run()
+        }}
+      >
+        🔗
+      </ToolbarButton>
+      <ToolbarButton
+        label="Insert image"
+        onClick={() => {
+          const url = window.prompt("Image URL")
+          if (!url) return
+          editor.chain().focus().setImage({ src: url }).run()
+        }}
+      >
+        🖼
+      </ToolbarButton>
+      <ToolbarButton
+        label="Insert table"
+        onClick={() =>
+          editor
+            .chain()
+            .focus()
+            .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+            .run()
+        }
+      >
+        ⊞
       </ToolbarButton>
 
       <span className="simple-editor__sep" aria-hidden />
@@ -668,7 +795,32 @@ export function SimpleEditor({
 
   const editor = useEditor({
     immediatelyRender: false,
-    extensions: [StarterKit, Placeholder.configure({ placeholder }), AiCompletion],
+    extensions: [
+      StarterKit.configure({ link: { openOnClick: false } }),
+      Placeholder.configure({ placeholder }),
+      AiCompletion,
+      TextStyle,
+      Color,
+      Highlight.configure({ multicolor: true }),
+      Subscript,
+      Superscript,
+      TextAlign.configure({ types: ["heading", "paragraph"] }),
+      TaskList,
+      TaskItem.configure({ nested: true }),
+      Typography,
+      Mathematics,
+      Emoji.configure({
+        emojis: gitHubEmojis.filter((e) => !e.name.includes("regional")),
+        forceFallbackImages: true,
+      }),
+      Mention,
+      Image,
+      TableKit.configure({ table: { resizable: true, cellMinWidth: 120 } }),
+      TableOfContents.configure({ getIndex: getHierarchicalIndexes }),
+      UniqueID.configure({
+        types: ["heading", "paragraph", "blockquote", "codeBlock", "table", "bulletList", "orderedList", "taskList"],
+      }),
+    ],
     content: documents[0]?.content ?? EMPTY_DOC,
     editorProps: {
       attributes: { class: "simple-editor__content" },
@@ -803,19 +955,25 @@ export function SimpleEditor({
           e.target.value = ""
         }}
       />
-      <Toolbar editor={editor} />
-      <AiStatusBanner
-        configured={aiConfigured}
-        status={aiStatus}
-        onConfigure={() => setAiPanelOpen(true)}
-        onDismiss={() => editor.commands.dismissAiCompletion()}
-      />
-      <EditorContent editor={editor} />
-      <SpecTemplateChat
-        editor={editor}
-        configured={aiConfigured}
-        onConfigure={() => setAiPanelOpen(true)}
-      />
+      <EditorContext.Provider value={{ editor }}>
+        <Toolbar editor={editor} />
+        <AiStatusBanner
+          configured={aiConfigured}
+          status={aiStatus}
+          onConfigure={() => setAiPanelOpen(true)}
+          onDismiss={() => editor.commands.dismissAiCompletion()}
+        />
+        <EditorContent editor={editor}>
+          <EmojiDropdownMenu />
+          <MentionDropdownMenu />
+          <SlashDropdownMenu />
+        </EditorContent>
+        <SpecTemplateChat
+          editor={editor}
+          configured={aiConfigured}
+          onConfigure={() => setAiPanelOpen(true)}
+        />
+      </EditorContext.Provider>
     </div>
   )
 }
