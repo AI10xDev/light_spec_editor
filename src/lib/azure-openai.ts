@@ -6,6 +6,8 @@ export interface AzureOpenAIConfig {
 }
 
 const STORAGE_KEY = "azure-openai-config"
+const SYSTEM_PROMPT_KEY = "azure-openai-system-prompt"
+const SAVED_PROMPTS_KEY = "azure-openai-saved-prompts"
 const DEFAULT_API_VERSION = "2024-10-21"
 
 /**
@@ -24,7 +26,7 @@ function normalizeEndpoint(input: string | undefined): string {
   out = out.replace(/\/+$/, "")
   return out
 }
-const SYSTEM_PROMPT =
+export const DEFAULT_SYSTEM_PROMPT =
   "You are an inline autocomplete engine for an author writing a Feature & Technical Requirements Spec Sheet. " +
   "Your job is to extend the document the user is writing in the precise voice and structure of a software requirements specification: " +
   "crisp, unambiguous, testable. Prefer requirement-style verbs (MUST, SHOULD, MAY per RFC 2119), measurable acceptance criteria, " +
@@ -34,6 +36,80 @@ const SYSTEM_PROMPT =
   "Output ONLY the continuation — no quotes, no preamble, no Markdown fences, no repetition of the input. " +
   "If the input ends mid-word, complete the word; if mid-sentence, complete the sentence. " +
   "Keep it under 40 words and never start a new paragraph."
+
+export interface SavedSystemPrompt {
+  name: string
+  prompt: string
+}
+
+export function getActiveSystemPrompt(): string {
+  if (typeof localStorage === "undefined") return DEFAULT_SYSTEM_PROMPT
+  try {
+    const raw = localStorage.getItem(SYSTEM_PROMPT_KEY)
+    if (typeof raw === "string" && raw.trim()) return raw
+  } catch {
+    // fall through
+  }
+  return DEFAULT_SYSTEM_PROMPT
+}
+
+export function setActiveSystemPrompt(prompt: string): void {
+  if (typeof localStorage === "undefined") return
+  if (!prompt.trim()) {
+    localStorage.removeItem(SYSTEM_PROMPT_KEY)
+    return
+  }
+  try {
+    localStorage.setItem(SYSTEM_PROMPT_KEY, prompt)
+  } catch (err) {
+    console.warn("Failed to persist active system prompt", err)
+  }
+}
+
+export function listSavedPrompts(): SavedSystemPrompt[] {
+  if (typeof localStorage === "undefined") return []
+  try {
+    const raw = localStorage.getItem(SAVED_PROMPTS_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is SavedSystemPrompt =>
+        !!item &&
+        typeof (item as SavedSystemPrompt).name === "string" &&
+        typeof (item as SavedSystemPrompt).prompt === "string",
+    )
+  } catch {
+    return []
+  }
+}
+
+function writeSavedPrompts(list: SavedSystemPrompt[]): void {
+  if (typeof localStorage === "undefined") return
+  try {
+    localStorage.setItem(SAVED_PROMPTS_KEY, JSON.stringify(list))
+  } catch (err) {
+    console.warn("Failed to persist saved prompts", err)
+  }
+}
+
+export function saveNamedPrompt(name: string, prompt: string): SavedSystemPrompt[] {
+  const cleaned = name.trim()
+  if (!cleaned) throw new Error("Name required")
+  const list = listSavedPrompts()
+  const idx = list.findIndex((p) => p.name === cleaned)
+  const entry: SavedSystemPrompt = { name: cleaned, prompt }
+  if (idx === -1) list.push(entry)
+  else list[idx] = entry
+  writeSavedPrompts(list)
+  return list
+}
+
+export function deleteSavedPrompt(name: string): SavedSystemPrompt[] {
+  const list = listSavedPrompts().filter((p) => p.name !== name)
+  writeSavedPrompts(list)
+  return list
+}
 
 interface EnvShape {
   readonly VITE_AZURE_OPENAI_ENDPOINT?: string
@@ -194,7 +270,7 @@ export async function getCompletion(
   // models too) and skip the others to keep the body model-agnostic.
   const body = {
     messages: [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: getActiveSystemPrompt() },
       { role: "user", content: prefix },
     ],
     // 80 is enough output for an inline suggestion, but reasoning models

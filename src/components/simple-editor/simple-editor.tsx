@@ -32,11 +32,18 @@ import {
 import { SpecTemplateChat } from "@/components/spec-template-chat/spec-template-chat"
 import {
   clearStoredConfig,
+  DEFAULT_SYSTEM_PROMPT,
+  deleteSavedPrompt,
+  getActiveSystemPrompt,
   getConfig,
   isConfigured,
+  listSavedPrompts,
+  saveNamedPrompt,
+  setActiveSystemPrompt,
   setStoredConfig,
   testConnection,
   type AzureOpenAIConfig,
+  type SavedSystemPrompt,
   type TestResult,
 } from "@/lib/azure-openai"
 import { htmlToMarkdown } from "@/lib/html-to-markdown"
@@ -56,6 +63,48 @@ interface EditorDocument {
 
 const EMPTY_DOC = "<p></p>"
 const OPEN_ACCEPT = ".html,.htm,.md,.markdown,.txt,.json,text/html,text/markdown,text/plain,application/json"
+const AUTOSAVE_STORAGE_KEY = "simple-editor:documents:v1"
+const AUTOSAVE_DEBOUNCE_MS = 1000
+
+interface PersistedState {
+  activeId: string
+  documents: EditorDocument[]
+}
+
+function loadPersistedState(): PersistedState | null {
+  if (typeof localStorage === "undefined") return null
+  try {
+    const raw = localStorage.getItem(AUTOSAVE_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== "object") return null
+    const { activeId, documents } = parsed as Partial<PersistedState>
+    if (typeof activeId !== "string" || !Array.isArray(documents)) return null
+    const docs = documents.filter(
+      (d): d is EditorDocument =>
+        !!d &&
+        typeof (d as EditorDocument).id === "string" &&
+        typeof (d as EditorDocument).name === "string" &&
+        typeof (d as EditorDocument).content === "string",
+    )
+    if (docs.length === 0) return null
+    const active = docs.some((d) => d.id === activeId) ? activeId : docs[0].id
+    return { activeId: active, documents: docs }
+  } catch (err) {
+    console.warn("Failed to read autosaved documents", err)
+    return null
+  }
+}
+
+function persistState(state: PersistedState): void {
+  if (typeof localStorage === "undefined") return
+  try {
+    localStorage.setItem(AUTOSAVE_STORAGE_KEY, JSON.stringify(state))
+  } catch (err) {
+    // QuotaExceededError on huge docs/embedded images — non-fatal, keep editing.
+    console.warn("Autosave to localStorage failed", err)
+  }
+}
 
 function makeId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID()
@@ -79,7 +128,30 @@ function mimeForName(name: string): string {
   return "text/plain"
 }
 
-async function saveTextToFile(suggestedName: string, contents: string): Promise<void> {
+type FileHandleLike = {
+  createWritable: () => Promise<{
+    write: (data: BlobPart) => Promise<void>
+    close: () => Promise<void>
+  }>
+}
+
+async function writeToHandle(
+  handle: FileHandleLike,
+  contents: string,
+  mime: string,
+): Promise<void> {
+  const writable = await handle.createWritable()
+  await writable.write(new Blob([contents], { type: mime }))
+  await writable.close()
+}
+
+// Returns the picked FileSystemFileHandle when the File System Access API was
+// used, so callers can stash it for silent autosave. Returns null when the
+// download fallback was used or the user cancelled the picker.
+async function saveTextToFile(
+  suggestedName: string,
+  contents: string,
+): Promise<FileHandleLike | null> {
   const mime = mimeForName(suggestedName)
   const ext = suggestedName.split(".").pop()?.toLowerCase() ?? "html"
   // File System Access API — Chromium only. Gives a real Save As dialog.
@@ -87,12 +159,7 @@ async function saveTextToFile(suggestedName: string, contents: string): Promise<
     showSaveFilePicker?: (opts: {
       suggestedName?: string
       types?: { description: string; accept: Record<string, string[]> }[]
-    }) => Promise<{
-      createWritable: () => Promise<{
-        write: (data: BlobPart) => Promise<void>
-        close: () => Promise<void>
-      }>
-    }>
+    }) => Promise<FileHandleLike>
   }
   if (typeof w.showSaveFilePicker === "function") {
     try {
@@ -105,13 +172,11 @@ async function saveTextToFile(suggestedName: string, contents: string): Promise<
           },
         ],
       })
-      const writable = await handle.createWritable()
-      await writable.write(new Blob([contents], { type: mime }))
-      await writable.close()
-      return
+      await writeToHandle(handle, contents, mime)
+      return handle
     } catch (err) {
       // AbortError = user cancelled the picker; swallow silently.
-      if (err instanceof DOMException && err.name === "AbortError") return
+      if (err instanceof DOMException && err.name === "AbortError") return null
       console.warn("showSaveFilePicker failed, falling back to download", err)
     }
   }
@@ -125,6 +190,7 @@ async function saveTextToFile(suggestedName: string, contents: string): Promise<
   a.click()
   a.remove()
   URL.revokeObjectURL(url)
+  return null
 }
 
 function fileToHtml(name: string, text: string): string {
@@ -180,6 +246,7 @@ interface TabBarProps {
   aiConfigured: boolean
   aiLoading: boolean
   onOpenAiSettings: () => void
+  onOpenSystemPrompt: () => void
   onTriggerAi: () => void
 }
 
@@ -338,6 +405,189 @@ function AiSettingsPanel({ onClose, onSaved }: AiSettingsPanelProps) {
   )
 }
 
+interface SystemPromptDialogProps {
+  onClose: () => void
+}
+
+function SystemPromptDialog({ onClose }: SystemPromptDialogProps) {
+  const [prompt, setPrompt] = useState<string>(() => getActiveSystemPrompt())
+  const [savedList, setSavedList] = useState<SavedSystemPrompt[]>(() => listSavedPrompts())
+  const [selectedName, setSelectedName] = useState<string>("")
+  const [newName, setNewName] = useState<string>("")
+  const [status, setStatus] = useState<string | null>(null)
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose()
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [onClose])
+
+  const handleLoad = () => {
+    const found = savedList.find((p) => p.name === selectedName)
+    if (!found) return
+    setPrompt(found.prompt)
+    setStatus(`Loaded "${found.name}".`)
+  }
+
+  const handleDelete = () => {
+    if (!selectedName) return
+    if (!window.confirm(`Delete saved prompt "${selectedName}"?`)) return
+    const next = deleteSavedPrompt(selectedName)
+    setSavedList(next)
+    setStatus(`Deleted "${selectedName}".`)
+    setSelectedName("")
+  }
+
+  const handleSaveAs = () => {
+    const name = newName.trim()
+    if (!name) return
+    const next = saveNamedPrompt(name, prompt)
+    setSavedList(next)
+    setSelectedName(name)
+    setNewName("")
+    setStatus(`Saved as "${name}".`)
+  }
+
+  const handleResetDefault = () => {
+    setPrompt(DEFAULT_SYSTEM_PROMPT)
+    setStatus("Reset to default (not applied until you click Apply).")
+  }
+
+  const handleApply = () => {
+    setActiveSystemPrompt(prompt)
+    onClose()
+  }
+
+  // Click on the dim backdrop (but not the modal itself) closes the dialog.
+  const handleOverlayMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) onClose()
+  }
+
+  return (
+    <div
+      className="simple-editor__modal-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="AI system prompt"
+      onMouseDown={handleOverlayMouseDown}
+    >
+      <div className="simple-editor__modal">
+        <div className="simple-editor__modal-header">
+          <div className="simple-editor__modal-title">AI system prompt</div>
+          <button
+            type="button"
+            className="simple-editor__tab-close"
+            aria-label="Close dialog"
+            title="Close"
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="simple-editor__ai-field">
+          <span>Saved prompts</span>
+          <div className="simple-editor__prompt-row">
+            <select
+              className="simple-editor__prompt-select"
+              value={selectedName}
+              onChange={(e) => setSelectedName(e.target.value)}
+              aria-label="Saved prompts"
+            >
+              <option value="">— select a saved prompt —</option>
+              {savedList.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="simple-editor__btn"
+              onClick={handleLoad}
+              disabled={!selectedName}
+            >
+              Load
+            </button>
+            <button
+              type="button"
+              className="simple-editor__btn"
+              onClick={handleDelete}
+              disabled={!selectedName}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+
+        <label className="simple-editor__ai-field">
+          <span>Prompt</span>
+          <textarea
+            className="simple-editor__prompt-textarea"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            rows={10}
+            spellCheck={false}
+            placeholder="Describe how the AI should write…"
+          />
+        </label>
+
+        <div className="simple-editor__ai-field">
+          <span>Save current prompt as…</span>
+          <div className="simple-editor__prompt-row">
+            <input
+              type="text"
+              className="simple-editor__prompt-name"
+              placeholder="Name (e.g. 'API spec')"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  handleSaveAs()
+                }
+              }}
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              className="simple-editor__btn"
+              onClick={handleSaveAs}
+              disabled={!newName.trim()}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+
+        {status && <p className="simple-editor__ai-hint">{status}</p>}
+
+        <div className="simple-editor__ai-actions">
+          <button
+            type="button"
+            className="simple-editor__btn"
+            onClick={handleResetDefault}
+          >
+            Reset to default
+          </button>
+          <button type="button" className="simple-editor__btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="simple-editor__btn is-active"
+            onClick={handleApply}
+          >
+            Apply
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 interface TabItemProps {
   doc: EditorDocument
   isActive: boolean
@@ -458,6 +708,7 @@ function TabBar({
   aiConfigured,
   aiLoading,
   onOpenAiSettings,
+  onOpenSystemPrompt,
   onTriggerAi,
 }: TabBarProps) {
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -496,6 +747,16 @@ function TabBar({
           onClick={onOpenAiSettings}
         >
           ✨
+        </button>
+        <button
+          type="button"
+          className="simple-editor__btn"
+          aria-label="Edit AI system prompt"
+          title="System prompt"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onOpenSystemPrompt}
+        >
+          🧠
         </button>
         {aiConfigured && (
           <button
@@ -783,12 +1044,28 @@ export function SimpleEditor({
   initialContent = "<h1>Hello</h1><p>Start writing…</p>",
   placeholder = "Start writing…",
 }: SimpleEditorProps) {
-  const [documents, setDocuments] = useState<EditorDocument[]>(() => [
-    { id: makeId(), name: "Untitled", content: initialContent },
-  ])
-  const [activeId, setActiveId] = useState<string>(() => documents[0]?.id ?? "")
+  const [documents, setDocuments] = useState<EditorDocument[]>(() => {
+    const persisted = loadPersistedState()
+    return (
+      persisted?.documents ?? [
+        { id: makeId(), name: "Untitled", content: initialContent },
+      ]
+    )
+  })
+  const [activeId, setActiveId] = useState<string>(() => {
+    // loadPersistedState already validates that activeId points to a doc in its
+    // documents list, so if it returns non-null here the id is guaranteed valid.
+    const persisted = loadPersistedState()
+    return persisted?.activeId ?? documents[0]?.id ?? ""
+  })
+  // Per-doc file handles captured from a prior Save / Save as Markdown. When
+  // present, autosave silently rewrites the same file on edits.
+  const fileHandlesRef = useRef<
+    Map<string, { handle: FileHandleLike; format: "html" | "markdown" }>
+  >(new Map())
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
+  const [systemPromptOpen, setSystemPromptOpen] = useState(false)
   const [aiConfigured, setAiConfigured] = useState(() => isConfigured())
   const [aiStatus, setAiStatus] = useState<AiCompletionState>({
     suggestion: null,
@@ -834,7 +1111,10 @@ export function SimpleEditor({
         types: ["heading", "paragraph", "blockquote", "codeBlock", "table", "bulletList", "orderedList", "taskList"],
       }),
     ],
-    content: documents[0]?.content ?? EMPTY_DOC,
+    content:
+      documents.find((d) => d.id === activeId)?.content ??
+      documents[0]?.content ??
+      EMPTY_DOC,
     editorProps: {
       attributes: { class: "simple-editor__content" },
     },
@@ -865,6 +1145,29 @@ export function SimpleEditor({
     // not on every keystroke (which mutates documents via onUpdate).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, editor])
+
+  // Debounced autosave: 1s after the latest edit (or AI suggestion accept, which
+  // routes through onUpdate just like a keystroke), persist all tabs to
+  // localStorage and silently rewrite any file the user has previously Saved to.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      persistState({ activeId, documents })
+      const entry = fileHandlesRef.current.get(activeId)
+      if (!entry) return
+      const doc = documents.find((d) => d.id === activeId)
+      if (!doc) return
+      const contents =
+        entry.format === "markdown" ? htmlToMarkdown(doc.content) : doc.content
+      const mime = entry.format === "markdown" ? "text/markdown" : "text/html"
+      void writeToHandle(entry.handle, contents, mime).catch((err) => {
+        // Permission revoked, file deleted, or similar — drop the handle so we
+        // stop trying on every subsequent edit.
+        console.warn("Autosave to file failed; disabling file-handle autosave for this doc", err)
+        fileHandlesRef.current.delete(activeId)
+      })
+    }, AUTOSAVE_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [documents, activeId])
 
   const handleNew = useCallback(() => {
     const doc: EditorDocument = { id: makeId(), name: "Untitled", content: EMPTY_DOC }
@@ -897,6 +1200,7 @@ export function SimpleEditor({
 
   const handleClose = useCallback(
     (id: string) => {
+      fileHandlesRef.current.delete(id)
       setDocuments((prev) => {
         const idx = prev.findIndex((d) => d.id === id)
         if (idx === -1) return prev
@@ -928,7 +1232,8 @@ export function SimpleEditor({
     // the very latest keystroke into state yet.
     const html = editor.getHTML()
     const suggestedName = /\.[a-z0-9]+$/i.test(doc.name) ? doc.name : `${doc.name}.html`
-    await saveTextToFile(suggestedName, html)
+    const handle = await saveTextToFile(suggestedName, html)
+    if (handle) fileHandlesRef.current.set(doc.id, { handle, format: "html" })
     if (suggestedName !== doc.name) handleRename(doc.id, suggestedName)
   }, [editor, documents, activeId, handleRename])
 
@@ -939,7 +1244,8 @@ export function SimpleEditor({
     const md = htmlToMarkdown(editor.getHTML())
     const stem = doc.name.replace(/\.[a-z0-9]+$/i, "")
     const suggestedName = `${stem || "untitled"}.md`
-    await saveTextToFile(suggestedName, md)
+    const handle = await saveTextToFile(suggestedName, md)
+    if (handle) fileHandlesRef.current.set(doc.id, { handle, format: "markdown" })
   }, [editor, documents, activeId])
 
   if (!editor) return null
@@ -959,6 +1265,7 @@ export function SimpleEditor({
         aiConfigured={aiConfigured}
         aiLoading={aiStatus.loading}
         onOpenAiSettings={() => setAiPanelOpen((v) => !v)}
+        onOpenSystemPrompt={() => setSystemPromptOpen(true)}
         onTriggerAi={() => editor.commands.triggerAiCompletion()}
       />
       {aiPanelOpen && (
@@ -966,6 +1273,9 @@ export function SimpleEditor({
           onClose={() => setAiPanelOpen(false)}
           onSaved={() => setAiConfigured(isConfigured())}
         />
+      )}
+      {systemPromptOpen && (
+        <SystemPromptDialog onClose={() => setSystemPromptOpen(false)} />
       )}
       <input
         ref={fileInputRef}
